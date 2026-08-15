@@ -163,6 +163,14 @@ public:
 
 	GodotPhysicsDirectBodyState2D *get_direct_state();
 
+	// Recomputes the total gravity (areas + default area, scaled by
+	// gravity_scale) from the body's current transform and shape overlaps.
+	// Unlike the `gravity` member, which is only refreshed in
+	// integrate_forces() while the body is active, this is always up to date,
+	// so get_gravity() reflects Area2D gravity changes immediately even for
+	// stationary/inactive character bodies.
+	Vector2 compute_gravity() const;
+
 	_FORCE_INLINE_ void add_area(GodotArea2D *p_area) {
 		int index = areas.find(AreaCMP(p_area));
 		if (index > -1) {

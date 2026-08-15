@@ -34,7 +34,11 @@
 #include "godot_space_2d.h"
 
 Vector2 GodotPhysicsDirectBodyState2D::get_total_gravity() const {
-	return body->gravity;
+	// Recompute from the current area overlaps so the returned value is never
+	// stale (previously this returned the value cached in integrate_forces(),
+	// which for stationary/inactive CharacterBody2D was never refreshed and
+	// did not reflect Area2D gravity overrides).
+	return body->compute_gravity();
 }
 
 real_t GodotPhysicsDirectBodyState2D::get_total_angular_damp() const {

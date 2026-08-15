@@ -32,6 +32,7 @@
 
 #include "godot_area_2d.h"
 #include "godot_body_direct_state_2d.h"
+#include "godot_collision_solver_2d.h"
 #include "godot_constraint_2d.h"
 #include "godot_space_2d.h"
 
@@ -417,6 +418,112 @@ void GodotBody2D::set_space(GodotSpace2D *p_space) {
 
 void GodotBody2D::_update_transform_dependent() {
 	center_of_mass = get_transform().basis_xform(center_of_mass_local);
+}
+
+Vector2 GodotBody2D::compute_gravity() const {
+	GodotSpace2D *space_2d = get_space();
+	if (space_2d == nullptr || space_2d->is_locked()) {
+		// Not in a space, or a physics step is in progress on another thread;
+		// fall back to the value computed by integrate_forces() (which is the
+		// one actually being applied in that case).
+		return gravity;
+	}
+
+	// Build the world-space AABB of the body (union of the shape AABBs).
+	Rect2 body_aabb;
+	bool shapes_found = false;
+	for (int i = 0; i < get_shape_count(); i++) {
+		if (is_shape_disabled(i)) {
+			continue;
+		}
+		Rect2 shape_aabb = get_shape_aabb(i);
+		if (!shapes_found) {
+			body_aabb = shape_aabb;
+			shapes_found = true;
+		} else {
+			body_aabb = body_aabb.merge(shape_aabb);
+		}
+	}
+	if (!shapes_found) {
+		return gravity;
+	}
+
+	// Determine which areas currently overlap the body. Unlike the `areas`
+	// list, which is only kept up to date while the body is active (area
+	// pairs are only processed for active bodies / moved areas), this fresh
+	// cull reflects the current state even for stationary bodies.
+	Vector<AreaCMP> overlapping_areas;
+	int amount = space_2d->cull_aabb(body_aabb);
+	const Vector<GodotCollisionObject2D *> &query_results = space_2d->get_intersection_query_results();
+	const Vector<int> &query_subindex_results = space_2d->get_intersection_query_subindex_results();
+	for (int i = 0; i < amount; i++) {
+		GodotCollisionObject2D *col_obj = query_results[i];
+		if (col_obj->get_type() != GodotCollisionObject2D::TYPE_AREA) {
+			continue;
+		}
+		GodotArea2D *area = static_cast<GodotArea2D *>(col_obj);
+		// Same mask check as the area-body pair (body layer vs area mask).
+		if ((get_collision_layer() & area->get_collision_mask()) == 0) {
+			continue;
+		}
+		if (overlapping_areas.find(AreaCMP(area)) != -1) {
+			continue; // Already accounted for through another shape.
+		}
+
+		int shape_idx = query_subindex_results[i];
+		Transform2D area_shape_xform = area->get_transform() * area->get_shape_transform(shape_idx);
+		for (int j = 0; j < get_shape_count(); j++) {
+			if (is_shape_disabled(j)) {
+				continue;
+			}
+			if (GodotCollisionSolver2D::solve(get_shape(j), get_transform() * get_shape_transform(j), Vector2(), area->get_shape(shape_idx), area_shape_xform, Vector2(), nullptr, nullptr, nullptr, 0)) {
+				overlapping_areas.push_back(AreaCMP(area));
+				break;
+			}
+		}
+	}
+
+	// Combine gravity from overlapping areas in priority order (same semantics
+	// as integrate_forces()).
+	overlapping_areas.sort();
+
+	Vector2 total_gravity = Vector2();
+	bool gravity_done = false;
+	for (int i = overlapping_areas.size() - 1; i >= 0 && !gravity_done; i--) {
+		PS2DE::AreaSpaceOverrideMode area_gravity_mode = (PS2DE::AreaSpaceOverrideMode)(int)overlapping_areas[i].area->get_param(PS2DE::AREA_PARAM_GRAVITY_OVERRIDE_MODE);
+		if (area_gravity_mode == PS2DE::AREA_SPACE_OVERRIDE_DISABLED) {
+			continue;
+		}
+
+		Vector2 area_gravity;
+		overlapping_areas[i].area->compute_gravity(get_transform().get_origin(), area_gravity);
+		switch (area_gravity_mode) {
+			case PS2DE::AREA_SPACE_OVERRIDE_COMBINE:
+			case PS2DE::AREA_SPACE_OVERRIDE_COMBINE_REPLACE: {
+				total_gravity += area_gravity;
+				gravity_done = area_gravity_mode == PS2DE::AREA_SPACE_OVERRIDE_COMBINE_REPLACE;
+			} break;
+			case PS2DE::AREA_SPACE_OVERRIDE_REPLACE:
+			case PS2DE::AREA_SPACE_OVERRIDE_REPLACE_COMBINE: {
+				total_gravity = area_gravity;
+				gravity_done = area_gravity_mode == PS2DE::AREA_SPACE_OVERRIDE_REPLACE;
+			} break;
+			default: {
+			}
+		}
+	}
+
+	// Add default gravity from the space area if no area provided gravity.
+	if (!gravity_done) {
+		GodotArea2D *default_area = space_2d->get_default_area();
+		if (default_area != nullptr) {
+			Vector2 default_gravity;
+			default_area->compute_gravity(get_transform().get_origin(), default_gravity);
+			total_gravity += default_gravity;
+		}
+	}
+
+	return total_gravity * gravity_scale;
 }
 
 void GodotBody2D::integrate_forces(real_t p_step) {
