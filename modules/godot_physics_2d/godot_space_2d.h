@@ -100,12 +100,11 @@ private:
 	real_t contact_bias = 0.0;
 	real_t constraint_bias = 0.0;
 
-	enum {
-		INTERSECTION_QUERY_MAX = 2048
-	};
-
-	GodotCollisionObject2D *intersection_query_results[INTERSECTION_QUERY_MAX];
-	int intersection_query_subindex_results[INTERSECTION_QUERY_MAX];
+	// Broadphase cull buffers. They grow on demand so that query results are
+	// never silently truncated when more objects than a fixed limit overlap the
+	// query region (which made intersect_shape/collide_shape miss shapes).
+	Vector<GodotCollisionObject2D *> intersection_query_results;
+	Vector<int> intersection_query_subindex_results;
 
 	real_t body_linear_velocity_sleep_threshold = 0.0;
 	real_t body_angular_velocity_sleep_threshold = 0.0;
@@ -149,6 +148,18 @@ public:
 	void area_remove_from_monitor_query_list(SelfList<GodotArea2D> *p_area);
 
 	GodotBroadPhase2D *get_broadphase();
+
+	// Culls the broadphase into the internal query buffers, growing them as
+	// needed so the result is never truncated by a fixed limit.
+	// Returns the number of results; pairs of (intersection_query_results[i],
+	// intersection_query_subindex_results[i]) describe each hit.
+	int cull_aabb(const Rect2 &p_aabb);
+	int cull_segment(const Vector2 &p_from, const Vector2 &p_to);
+
+	// Accessors for the results of the last cull (used by non-friend classes
+	// such as GodotBody2D::compute_gravity()).
+	_FORCE_INLINE_ const Vector<GodotCollisionObject2D *> &get_intersection_query_results() const { return intersection_query_results; }
+	_FORCE_INLINE_ const Vector<int> &get_intersection_query_subindex_results() const { return intersection_query_subindex_results; }
 
 	void add_object(GodotCollisionObject2D *p_object);
 	void remove_object(GodotCollisionObject2D *p_object);

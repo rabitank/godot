@@ -65,7 +65,7 @@ int GodotPhysicsDirectSpaceState2D::intersect_point(const PS2DT::PointParameters
 	aabb.position = p_parameters.position - Vector2(0.00001, 0.00001);
 	aabb.size = Vector2(0.00002, 0.00002);
 
-	int amount = space->broadphase->cull_aabb(aabb, space->intersection_query_results, GodotSpace2D::INTERSECTION_QUERY_MAX, space->intersection_query_subindex_results);
+	int amount = space->cull_aabb(aabb);
 
 	int cc = 0;
 
@@ -124,7 +124,7 @@ bool GodotPhysicsDirectSpaceState2D::intersect_ray(const PS2DT::RayParameters &p
 	end = p_parameters.to;
 	normal = (end - begin).normalized();
 
-	int amount = space->broadphase->cull_segment(begin, end, space->intersection_query_results, GodotSpace2D::INTERSECTION_QUERY_MAX, space->intersection_query_subindex_results);
+	int amount = space->cull_segment(begin, end);
 
 	//todo, create another array that references results, compute AABBs and check closest point to ray origin, sort, and stop evaluating results when beyond first collision
 
@@ -217,7 +217,7 @@ int GodotPhysicsDirectSpaceState2D::intersect_shape(const PS2DT::ShapeParameters
 	aabb = aabb.merge(Rect2(aabb.position + p_parameters.motion, aabb.size)); //motion
 	aabb = aabb.grow(p_parameters.margin);
 
-	int amount = space->broadphase->cull_aabb(aabb, space->intersection_query_results, GodotSpace2D::INTERSECTION_QUERY_MAX, space->intersection_query_subindex_results);
+	int amount = space->cull_aabb(aabb);
 
 	int cc = 0;
 
@@ -262,7 +262,7 @@ bool GodotPhysicsDirectSpaceState2D::cast_motion(const PS2DT::ShapeParameters &p
 	aabb = aabb.merge(Rect2(aabb.position + p_parameters.motion, aabb.size)); //motion
 	aabb = aabb.grow(p_parameters.margin);
 
-	int amount = space->broadphase->cull_aabb(aabb, space->intersection_query_results, GodotSpace2D::INTERSECTION_QUERY_MAX, space->intersection_query_subindex_results);
+	int amount = space->cull_aabb(aabb);
 
 	real_t best_safe = 1;
 	real_t best_unsafe = 1;
@@ -349,7 +349,7 @@ bool GodotPhysicsDirectSpaceState2D::collide_shape(const PS2DT::ShapeParameters 
 	aabb = aabb.merge(Rect2(aabb.position + p_parameters.motion, aabb.size)); //motion
 	aabb = aabb.grow(p_parameters.margin);
 
-	int amount = space->broadphase->cull_aabb(aabb, space->intersection_query_results, GodotSpace2D::INTERSECTION_QUERY_MAX, space->intersection_query_subindex_results);
+	int amount = space->cull_aabb(aabb);
 
 	bool collided = false;
 	r_result_count = 0;
@@ -448,7 +448,7 @@ bool GodotPhysicsDirectSpaceState2D::rest_info(const PS2DT::ShapeParameters &p_p
 	aabb = aabb.merge(Rect2(aabb.position + p_parameters.motion, aabb.size)); //motion
 	aabb = aabb.grow(margin);
 
-	int amount = space->broadphase->cull_aabb(aabb, space->intersection_query_results, GodotSpace2D::INTERSECTION_QUERY_MAX, space->intersection_query_subindex_results);
+	int amount = space->cull_aabb(aabb);
 
 	_RestCallbackData2D rcd;
 
@@ -503,8 +503,36 @@ bool GodotPhysicsDirectSpaceState2D::rest_info(const PS2DT::ShapeParameters &p_p
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+int GodotSpace2D::cull_aabb(const Rect2 &p_aabb) {
+	int max_results = MAX(int(intersection_query_results.size()), 256);
+	for (;;) {
+		intersection_query_results.resize(max_results);
+		intersection_query_subindex_results.resize(max_results);
+		int amount = broadphase->cull_aabb(p_aabb, intersection_query_results.ptrw(), max_results, intersection_query_subindex_results.ptrw());
+		if (amount < max_results) {
+			return amount;
+		}
+		// The buffer may have been exactly full; grow it and re-cull so no
+		// overlapping object is silently dropped.
+		max_results *= 2;
+	}
+}
+
+int GodotSpace2D::cull_segment(const Vector2 &p_from, const Vector2 &p_to) {
+	int max_results = MAX(int(intersection_query_results.size()), 256);
+	for (;;) {
+		intersection_query_results.resize(max_results);
+		intersection_query_subindex_results.resize(max_results);
+		int amount = broadphase->cull_segment(p_from, p_to, intersection_query_results.ptrw(), max_results, intersection_query_subindex_results.ptrw());
+		if (amount < max_results) {
+			return amount;
+		}
+		max_results *= 2;
+	}
+}
+
 int GodotSpace2D::_cull_aabb_for_body(GodotBody2D *p_body, const Rect2 &p_aabb) {
-	int amount = broadphase->cull_aabb(p_aabb, intersection_query_results, INTERSECTION_QUERY_MAX, intersection_query_subindex_results);
+	int amount = cull_aabb(p_aabb);
 
 	for (int i = 0; i < amount; i++) {
 		bool keep = true;
@@ -521,8 +549,8 @@ int GodotSpace2D::_cull_aabb_for_body(GodotBody2D *p_body, const Rect2 &p_aabb) 
 
 		if (!keep) {
 			if (i < amount - 1) {
-				SWAP(intersection_query_results[i], intersection_query_results[amount - 1]);
-				SWAP(intersection_query_subindex_results[i], intersection_query_subindex_results[amount - 1]);
+				SWAP(intersection_query_results.write[i], intersection_query_results.write[amount - 1]);
+				SWAP(intersection_query_subindex_results.write[i], intersection_query_subindex_results.write[amount - 1]);
 			}
 
 			amount--;
